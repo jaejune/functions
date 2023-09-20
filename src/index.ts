@@ -19,6 +19,7 @@ admin.initializeApp({
   ),
 });
 
+/// 카카오 로그인
 exports.kakaoToken = functions
   .region("asia-northeast3")
   .https.onRequest(async (req, res) => {
@@ -34,6 +35,7 @@ exports.test = functions
     res.send({ status: true, data: "token" });
   });
 
+/// 수면 일정
 exports.convertDatetime = functions
   .region("asia-northeast3")
   .pubsub.schedule("every 5 minutes")
@@ -100,6 +102,16 @@ async function updateSchedule() {
   const prevDay = new Date(utc + koreaTimeDiff);
   prevDay.setDate(prevDay.getDate() - 1);
 
+  await checkBedTime(
+    db,
+    "single",
+    "TEMP",
+    getDay(korNow.getDay()),
+    time,
+    timeBefore,
+    korNow,
+    database
+  );
 
   await checkBedTime(
     db,
@@ -125,6 +137,16 @@ async function updateSchedule() {
 
   await checkWakeUpTime(
     db,
+    "single",
+    "TEMP",
+    getDay(korNow.getDay()),
+    time,
+    timeAfter,
+    database
+  );
+
+  await checkWakeUpTime(
+    db,
     "left",
     "LEFT_TEMP",
     getDay(korNow.getDay()),
@@ -140,6 +162,16 @@ async function updateSchedule() {
     getDay(korNow.getDay()),
     time,
     timeAfter,
+    database
+  );
+
+  await checkPrevDayWakeUpTime(
+    db,
+    "single",
+    "TEMP",
+    getDay(prevDay.getDay()),
+    time + 2400,
+    timeAfter + 2400,
     database
   );
 
@@ -196,20 +228,26 @@ async function checkBedTime(
   const dateNoTime = new Date(
     korNow.getFullYear(),
     korNow.getMonth(),
-    korNow.getDate()
+    korNow.getDate(),
+    9
   ).getTime();
+
+  console.log(dateNoTime);
 
   snapshot.docs.forEach((value) => {
     if (value.data()[position][day]["turnOn"] == true) {
       db.doc(value.id)
         .collection("schedule")
         .doc(dateNoTime.toString())
-        .set({
-          [position]: {
-            betTime: value.data()[position][day]["bedTime"],
-            wakeUpTime: value.data()[position][day]["wakeUpTime"],
+        .set(
+          {
+            [position]: {
+              betTime: value.data()[position][day]["bedTime"],
+              wakeUpTime: value.data()[position][day]["wakeUpTime"],
+            },
           },
-        });
+          { merge: true }
+        );
 
       database
         .ref(`devices/${value.id}`)
