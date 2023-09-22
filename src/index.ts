@@ -35,12 +35,61 @@ exports.test = functions
     res.send({ status: true, data: "token" });
   });
 
-/// 수면 일정
+/// 수면 일정 5분마다 실행
 exports.convertDatetime = functions
   .region("asia-northeast3")
   .pubsub.schedule("every 5 minutes")
   .onRun(async (context) => {
     await updateSchedule();
+  });
+
+/// 백업 매주마다 실행
+exports.backup = functions
+  .region("asia-northeast3")
+  .pubsub.schedule("0 0 * * 0")
+  .onRun(async (context) => {
+    const client = new admin.firestore.v1.FirestoreAdminClient();
+    const databaseName = client.databasePath("sleep-stage-f670f", "(default)");
+    const bucket = "gs://sleep-stage-f670f.appspot.com/backup";
+
+    client.exportDocuments({
+      name: databaseName,
+      collectionIds: [],
+      outputUriPrefix: bucket,
+    });
+  });
+
+/// 알림
+exports.notice = functions
+  .region("asia-northeast3")
+  .firestore.document("notice/{notice_id}")
+  .onCreate(async (snapshot) => {
+    const uid = snapshot.data()["uid"];
+    const body = snapshot.data()["content"];
+    const profile = (
+      await admin
+        .firestore()
+        .collection("profile")
+        .where("uid", "==", uid)
+        .get()
+    ).docs[0].data();
+    const fcmToken = profile["fcmToken"];
+    const push = profile["push"];
+    if (fcmToken !== null && push == true) {
+      admin.messaging().send({
+        token: profile["fcmToken"],
+        notification: {
+          body: body,
+        },
+        apns: {
+          payload: {
+            aps: {
+              sound: "default",
+            },
+          },
+        },
+      });
+    }
   });
 
 async function updateOrCreateUser(res: functions.Response, updateParams: any) {
@@ -84,6 +133,7 @@ async function updateSchedule() {
   );
 
   const tenBefore = new Date(utc + koreaTimeDiff);
+  /// 10분 전
   tenBefore.setMinutes(korNow.getMinutes() - 10);
   const timeBefore = Number(
     `${tenBefore.getHours()}${tenBefore
