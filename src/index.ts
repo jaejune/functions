@@ -64,20 +64,48 @@ exports.notice = functions
   .region("asia-northeast3")
   .firestore.document("notice/{notice_id}")
   .onCreate(async (snapshot) => {
-    const uid = snapshot.data()["uid"];
     const body = snapshot.data()["content"];
-    const profile = (
-      await admin
+    /// 유저한테 보낸 경우
+    if (snapshot.data()["scope"] == "user") {
+      const uid = snapshot.data()["uid"];
+      const profile = (
+        await admin
+          .firestore()
+          .collection("profile")
+          .where("uid", "==", uid)
+          .get()
+      ).docs[0].data();
+      const fcmToken = profile["fcmToken"];
+      const push = profile["push"];
+      if (fcmToken !== null && push == true) {
+        admin.messaging().send({
+          token: profile["fcmToken"],
+          notification: {
+            body: body,
+          },
+          apns: {
+            payload: {
+              aps: {
+                sound: "default",
+              },
+            },
+          },
+        });
+      }
+      /// 공지사항인 경우
+    } else {
+      const snapshot = await admin
         .firestore()
         .collection("profile")
-        .where("uid", "==", uid)
-        .get()
-    ).docs[0].data();
-    const fcmToken = profile["fcmToken"];
-    const push = profile["push"];
-    if (fcmToken !== null && push == true) {
-      admin.messaging().send({
-        token: profile["fcmToken"],
+        .where("fcmToken", "!=", null)
+        .where("push", "==", true)
+        .get();
+      /// 모든 유저 토큰
+      const tokens = snapshot.docs
+        .map((e) => e.data()["fcmToken"])
+        .filter((token, index, self) => self.indexOf(token) === index);
+      admin.messaging().sendEachForMulticast({
+        tokens: tokens,
         notification: {
           body: body,
         },
@@ -105,7 +133,7 @@ async function updateOrCreateUser(res: functions.Response, updateParams: any) {
     }
   }
 }
-
+/// 커스텀 토큰 생성
 async function createFirebaseToken(res: functions.Response, kakaoResult: any) {
   const userId = `kakao:${kakaoResult["id"]["value"]}`;
 
@@ -121,6 +149,7 @@ async function createFirebaseToken(res: functions.Response, kakaoResult: any) {
   return admin.auth().createCustomToken(userId, { provider: "KAKAO" });
 }
 
+/// 수면 일정 로직
 async function updateSchedule() {
   const db = admin.firestore().collection("device");
   const database = admin.database();
@@ -134,7 +163,7 @@ async function updateSchedule() {
 
   const tenBefore = new Date(utc + koreaTimeDiff);
   /// 10분 전
-  tenBefore.setMinutes(korNow.getMinutes() - 10);
+  tenBefore.setMinutes(korNow.getMinutes() - 30);
   const timeBefore = Number(
     `${tenBefore.getHours()}${tenBefore
       .getMinutes()
@@ -143,7 +172,8 @@ async function updateSchedule() {
   );
 
   const tenAfter = new Date(utc + koreaTimeDiff);
-  tenAfter.setMinutes(korNow.getMinutes() + 10);
+  /// 10분 후
+  tenAfter.setMinutes(korNow.getMinutes() + 30);
 
   const timeAfter = Number(
     `${tenAfter.getHours()}${tenAfter.getMinutes().toString().padStart(2, "0")}`
@@ -152,6 +182,7 @@ async function updateSchedule() {
   const prevDay = new Date(utc + koreaTimeDiff);
   prevDay.setDate(prevDay.getDate() - 1);
 
+  /// 싱글일 경우
   await checkBedTime(
     db,
     "single",
@@ -162,7 +193,7 @@ async function updateSchedule() {
     korNow,
     database
   );
-
+  /// 왼쪽일 경우
   await checkBedTime(
     db,
     "left",
@@ -173,7 +204,7 @@ async function updateSchedule() {
     korNow,
     database
   );
-
+  /// 오른쪽일 경우
   await checkBedTime(
     db,
     "right",
@@ -286,6 +317,7 @@ async function checkBedTime(
 
   snapshot.docs.forEach((value) => {
     if (value.data()[position][day]["turnOn"] == true) {
+      /// 수면 일정 디비에 업로드
       db.doc(value.id)
         .collection("schedule")
         .doc(dateNoTime.toString())
@@ -323,13 +355,14 @@ async function checkWakeUpTime(
   }
 
   const snapshot = await query.get();
-
+  /// 기상시간이면 25도로 맞춰줌
   snapshot.docs.forEach((value) => {
     if (value.data()[position][day]["turnOn"] == true) {
       database.ref(`devices/${value.id}`).update({ [positionTemp]: 25 });
     }
   });
 }
+/// 전날 기상시간 확인
 async function checkPrevDayWakeUpTime(
   db: CollectionReference,
   position: string,
